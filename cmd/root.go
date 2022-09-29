@@ -19,8 +19,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
+	"unicode"
 
 	"github.com/spf13/cobra"
 )
@@ -56,7 +58,7 @@ var rootCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		PrintHeader(Version, platform, arch, GitSha)
 
-		jsonBytes, err := os.ReadFile(os.Args[0])
+		jsonBytes, err := os.ReadFile(args[0])
 		if err != nil {
 			fmt.Printf("unable to open file due to error: '%v'\n", err)
 			os.Exit(1)
@@ -75,7 +77,7 @@ var rootCmd = &cobra.Command{
 			name = tokens[0]
 		}
 		if Lang == "java" {
-			_, err = builder.WriteString("public class ")
+			_, err = builder.WriteString("package com.example;\nimport java.util.List;\nimport java.util.Map;\n\npublic class ")
 			if err != nil {
 				fmt.Printf("unable to write class declaration due to error: '%v'\n", err)
 				os.Exit(1)
@@ -85,7 +87,7 @@ var rootCmd = &cobra.Command{
 				fmt.Printf("unable to write class name due to error: '%v'\n", err)
 				os.Exit(1)
 			}
-			_, err = builder.WriteString(" {\n")
+			_, err = builder.WriteString(" {\n\n")
 			if err != nil {
 				fmt.Printf("unable to write closing class declaration due to error: '%v'\n", err)
 				os.Exit(1)
@@ -108,22 +110,48 @@ var rootCmd = &cobra.Command{
 				os.Exit(1)
 			}
 		}
+		if Output == "" {
+			fmt.Println(builder.String())
+		} else {
+			os.WriteFile(Output, []byte(builder.String()), 0755)
+		}
 
 	},
 }
 
 func writeJava(key string, v interface{}) (string, error) {
 	var typeName string = ""
-	switch v.(type) {
-	case int:
+	vType := reflect.ValueOf(v)
+
+	switch vType.Kind() {
+	case reflect.Float32:
+		typeName = "float"
+	case reflect.Float64:
+		typeName = "double"
+	case reflect.Int:
 		typeName = "int"
+	case reflect.String:
+		typeName = "String"
+	case reflect.Bool:
+		typeName = "boolean"
+	case reflect.Slice:
+		typeName = "List"
+	case reflect.Map:
+		typeName = "Map<String, Object>"
 	default:
-		return "", fmt.Errorf("unable to handle type %t for %v", v, v)
+		return "", fmt.Errorf("unable to handle type %t for %v", v, key)
 	}
-	field := fmt.Sprintf("\tprivate %v %v;\n", typeName, key)
-	setter := fmt.Sprintf("\tpublic void set%v(%v %v){\n\t\tthis.%v = %v;\n\t}\n", key, typeName, key, key, key)
-	getter := fmt.Sprintf("\tpublic %v get%v(){\n\t\treturn this.%v;\n\t}\n", typeName, key, key)
+	field := fmt.Sprintf("\tprivate %v %v;\n\n", typeName, key)
+	setter := fmt.Sprintf("\tpublic void set%v(%v %v){\n\t\tthis.%v = %v;\n\t}\n\n", capitalize(key), typeName, key, key, key)
+	getter := fmt.Sprintf("\tpublic %v get%v(){\n\t\treturn this.%v;\n\t}\n\n", typeName, capitalize(key), key)
 	return field + setter + getter, nil
+}
+
+func capitalize(s string) string {
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
