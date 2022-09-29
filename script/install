@@ -1,0 +1,27 @@
+#!/bin/sh
+
+# script/install: Script to install from source, eventually when there 
+#                 are releases this will switch to latest release
+
+DOWNLOAD=""
+OS=""
+ARCH=`uname -m`
+if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+	OS="linux"
+elif [[ "$OSTYPE" == "darwin"* ]]; then
+	OS="darwin"
+elif [[ "$OSTYPE" == "cygwin" ]]; then
+	OS="linux"
+elif [[ "$OSTYPE" == "msys" ]]; then
+	OS="linux"
+else
+        echo script for os type $OSTYPE is unsupported, build from sournce instead 
+	exit 1
+fi
+
+DOWNLOAD=json2obj-$OS-$ARCH.zip
+curl -o $DOWNLOAD -L "https://github.com/rsvihladremio/json2obj/releases/latest/download/$DOWNLOAD"
+unzip $DOWNLOAD
+sudo mv ./bin/json2obj /usr/local/bin/
+rm $DOWNLOAD
+rm -fr json2obj-$OS-$ARCH
