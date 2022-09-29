@@ -70,59 +70,76 @@ var rootCmd = &cobra.Command{
 			fmt.Printf("unable to marshall json due to error: '%v'\n", err)
 			os.Exit(1)
 		}
-		builder := strings.Builder{}
 		name := "JsonObject"
 		if Output != "" {
 			tokens := strings.Split(Output, ".")
 			name = tokens[0]
 		}
+		var classText string
 		if Lang == "java" {
-			_, err = builder.WriteString("package com.example;\nimport java.util.List;\nimport java.util.Map;\n\npublic class ")
+
+			header := "package com.example;\nimport java.util.List;\nimport java.util.Map;\n\n"
+			classTextRaw, err := writeJavaClass(name, false, result)
 			if err != nil {
-				fmt.Printf("unable to write class declaration due to error: '%v'\n", err)
+				fmt.Println(err)
 				os.Exit(1)
 			}
-			_, err = builder.WriteString(name)
-			if err != nil {
-				fmt.Printf("unable to write class name due to error: '%v'\n", err)
-				os.Exit(1)
-			}
-			_, err = builder.WriteString(" {\n\n")
-			if err != nil {
-				fmt.Printf("unable to write closing class declaration due to error: '%v'\n", err)
-				os.Exit(1)
-			}
-			for k, v := range result {
-				str, err := writeJava(k, v)
-				if err != nil {
-					fmt.Printf("error generating java code for %v with error: '%v'\n", v, err)
-					os.Exit(1)
-				}
-				_, err = builder.WriteString(str)
-				if err != nil {
-					fmt.Printf("unable to write key %v due to error: '%v'\n", k, err)
-					os.Exit(1)
-				}
-			}
-			_, err = builder.WriteString("}\n")
-			if err != nil {
-				fmt.Printf("unable to write string due to error: '%v'\n", err)
-				os.Exit(1)
-			}
+			classText = fmt.Sprintf("%v\n%v", header, classTextRaw)
+		} else {
+			fmt.Printf("unknown programming language %v", Lang)
+			os.Exit(1)
 		}
 		if Output == "" {
-			fmt.Println(builder.String())
+			fmt.Println(classText)
 		} else {
-			os.WriteFile(Output, []byte(builder.String()), 0755)
+			os.WriteFile(Output, []byte(classText), 0755)
 		}
 
 	},
 }
 
-func writeJava(key string, v interface{}) (string, error) {
+func writeJavaClass(name string, isStatic bool, result map[string]interface{}) (string, error) {
+	staticString := ""
+	if isStatic {
+		staticString = "static "
+	}
+	builder := strings.Builder{}
+	_, err := builder.WriteString(fmt.Sprintf("public %vclass %v {\n\n", staticString, name))
+	if err != nil {
+		return "", fmt.Errorf("unable to write class name due to error: '%v", err)
+	}
+	var nestedClassesArray []string
+	for k, v := range result {
+		str, nestedClasses, err := writeJava(k, v)
+		if err != nil {
+			return "", fmt.Errorf("error generating java code for %v with error: '%v'", v, err)
+		}
+		_, err = builder.WriteString(str)
+		if err != nil {
+			return "", fmt.Errorf("unable to write key %v due to error: '%v'", k, err)
+		}
+		if nestedClasses != "" {
+			nestedClassesArray = append(nestedClassesArray, nestedClasses)
+		}
+	}
+
+	for _, nested := range nestedClassesArray {
+		_, err = builder.WriteString(nested)
+		if err != nil {
+			return "", fmt.Errorf("unable to write nested classes %v due to error: '%v'", nested, err)
+		}
+	}
+	_, err = builder.WriteString("}\n")
+	if err != nil {
+		return "", fmt.Errorf("unable to write string due to error: '%v'", err)
+	}
+	return builder.String(), nil
+}
+
+func writeJava(key string, v interface{}) (fieldText string, nestedClasses string, err error) {
+	var nestedClassesArray []string
 	var typeName string = ""
 	vType := reflect.ValueOf(v)
-
 	switch vType.Kind() {
 	case reflect.Float32:
 		typeName = "float"
@@ -137,14 +154,21 @@ func writeJava(key string, v interface{}) (string, error) {
 	case reflect.Slice:
 		typeName = "List"
 	case reflect.Map:
-		typeName = "Map<String, Object>"
+		mapValue := v.(map[string]interface{})
+		nestedValueName := fmt.Sprintf("%vNested1", capitalize(key))
+		newNestedClassStr, err := writeJavaClass(nestedValueName, true, mapValue)
+		if err != nil {
+			return "", "", fmt.Errorf("unable to handle nested type %T for %v", mapValue, key)
+		}
+		nestedClassesArray = append(nestedClassesArray, newNestedClassStr)
+		typeName = fmt.Sprintf("Map<String, %v>", nestedValueName)
 	default:
-		return "", fmt.Errorf("unable to handle type %t for %v", v, key)
+		return "", "", fmt.Errorf("unable to handle type %t for %v", v, key)
 	}
 	field := fmt.Sprintf("\tprivate %v %v;\n\n", typeName, key)
 	setter := fmt.Sprintf("\tpublic void set%v(%v %v){\n\t\tthis.%v = %v;\n\t}\n\n", capitalize(key), typeName, key, key, key)
 	getter := fmt.Sprintf("\tpublic %v get%v(){\n\t\treturn this.%v;\n\t}\n\n", typeName, capitalize(key), key)
-	return field + setter + getter, nil
+	return field + setter + getter, strings.Join(nestedClassesArray, "\n"), nil
 }
 
 func capitalize(s string) string {
