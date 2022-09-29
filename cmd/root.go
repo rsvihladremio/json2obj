@@ -152,7 +152,39 @@ func writeJava(key string, v interface{}) (fieldText string, nestedClasses strin
 	case reflect.Bool:
 		typeName = "boolean"
 	case reflect.Slice:
-		typeName = "List"
+		sliceValue := v.([]interface{})
+		if len(sliceValue) > 0 {
+			firstElement := sliceValue[0]
+			firstElementType := reflect.ValueOf(firstElement)
+			switch firstElementType.Kind() {
+			case reflect.Float32:
+				typeName = "List<Float>"
+			case reflect.Float64:
+				typeName = "List<Double>"
+			case reflect.Int:
+				typeName = "List<Integer>"
+			case reflect.String:
+				typeName = "List<String>"
+			case reflect.Bool:
+				typeName = "List<Boolean>"
+			case reflect.Slice:
+				//too hard to do for now
+				typeName = "List"
+			case reflect.Map:
+				// make a nested class
+				mapValue := firstElement.(map[string]interface{})
+				nestedValueName := fmt.Sprintf("%vNested1", capitalize(key))
+				newNestedClassStr, err := writeJavaClass(nestedValueName, true, mapValue)
+				if err != nil {
+					return "", "", fmt.Errorf("unable to handle nested type %T for %v", mapValue, key)
+				}
+				nestedClassesArray = append(nestedClassesArray, newNestedClassStr)
+				typeName = fmt.Sprintf("List<%v>", nestedValueName)
+			}
+		} else {
+			// no types so we can't guess just assume this
+			typeName = "List"
+		}
 	case reflect.Map:
 		mapValue := v.(map[string]interface{})
 		nestedValueName := fmt.Sprintf("%vNested1", capitalize(key))
