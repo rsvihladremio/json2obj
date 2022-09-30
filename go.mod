@@ -1,6 +1,6 @@
 module github.com/rsvihladremio/json2obj
 
-go 1.19
+go 1.18
 
 require (
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect

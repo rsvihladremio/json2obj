@@ -141,12 +141,13 @@ func writeJava(key string, v interface{}) (fieldText string, nestedClasses strin
 	var typeName string = ""
 	vType := reflect.ValueOf(v)
 	switch vType.Kind() {
-	case reflect.Float32:
-		typeName = "float"
 	case reflect.Float64:
-		typeName = "double"
-	case reflect.Int:
-		typeName = "int"
+		//go always unmarshalls numbers to this so we are going to detect things
+		if strings.Contains(fmt.Sprintf("%v", v), ".") {
+			typeName = "double"
+		} else {
+			typeName = "long"
+		}
 	case reflect.String:
 		typeName = "String"
 	case reflect.Bool:
@@ -193,7 +194,7 @@ func writeJava(key string, v interface{}) (fieldText string, nestedClasses strin
 			return "", "", fmt.Errorf("unable to handle nested type %T for %v", mapValue, key)
 		}
 		nestedClassesArray = append(nestedClassesArray, newNestedClassStr)
-		typeName = fmt.Sprintf("Map<String, %v>", nestedValueName)
+		typeName = nestedValueName
 	default:
 		return "", "", fmt.Errorf("unable to handle type %t for %v", v, key)
 	}
