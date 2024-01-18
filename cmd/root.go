@@ -1,24 +1,25 @@
-/*
-Copyright 2022 Ryan SVIHLA
+// Copyright 2022 Ryan SVIHLA
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// 	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-	http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-*/
+// Package cmd is where the logic of the command line flags is
 package cmd
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -36,9 +37,13 @@ var Version = "unknownVersion"
 var platform = runtime.GOOS
 var arch = runtime.GOARCH
 
+// Lang is the language to generate output on
 var Lang string
+
+// Output is where the file will be written
 var Output string
 
+// PrintHeader provides the program version
 func PrintHeader(version, platform, arch, gitSha string) string {
 	return fmt.Sprintf("json2obj %v-%v-%v-%v\n", version, gitSha, platform, arch)
 }
@@ -50,10 +55,7 @@ var rootCmd = &cobra.Command{
 	Long:  `converts a json text file to a data object in the language of your choice`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		// Optionally run one of the validators provided by cobra
-		if err := cobra.MinimumNArgs(1)(cmd, args); err != nil {
-			return err
-		}
-		return nil
+		return cobra.MinimumNArgs(1)(cmd, args)
 	},
 	Run: func(cmd *cobra.Command, args []string) {
 		PrintHeader(Version, platform, arch, GitSha)
@@ -72,7 +74,8 @@ var rootCmd = &cobra.Command{
 		}
 		name := "JsonObject"
 		if Output != "" {
-			tokens := strings.Split(Output, ".")
+			rawName := capitalize(filepath.Base(Output))
+			tokens := strings.Split(rawName, ".")
 			name = tokens[0]
 		}
 		var classText string
@@ -80,6 +83,14 @@ var rootCmd = &cobra.Command{
 
 			header := "package com.example;\nimport java.util.List;\nimport java.util.Map;\n\n"
 			classTextRaw, err := writeJavaClass(name, false, result)
+			if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			classText = fmt.Sprintf("%v\n%v", header, classTextRaw)
+		} else if Lang == "go" {
+			header := "package test;\n\nimport (\n\"fmt\"\n)\n"
+			classTextRaw, err := writeGoStruct(name, result)
 			if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
@@ -96,6 +107,105 @@ var rootCmd = &cobra.Command{
 		}
 
 	},
+}
+
+func writeGoStruct(name string, result map[string]interface{}) (string, error) {
+	builder := strings.Builder{}
+	_, err := builder.WriteString(fmt.Sprintf("type %v struct{\n", name))
+	if err != nil {
+		return "", fmt.Errorf("unable to write struct name due to error: '%v", err)
+	}
+	var nestedClassesArray []string
+	for k, v := range result {
+		str, nestedClasses, err := writeGo(k, v)
+		if err != nil {
+			return "", fmt.Errorf("error generating go code for %v with error: '%v'", v, err)
+		}
+		_, err = builder.WriteString(str)
+		if err != nil {
+			return "", fmt.Errorf("unable to write key %v due to error: '%v'", k, err)
+		}
+		if nestedClasses != "" {
+			nestedClassesArray = append(nestedClassesArray, nestedClasses)
+		}
+	}
+	_, err = builder.WriteString("}\n")
+	if err != nil {
+		return "", fmt.Errorf("unable to write string due to error: '%v'", err)
+	}
+
+	for _, nested := range nestedClassesArray {
+		_, err = builder.WriteString(nested)
+		if err != nil {
+			return "", fmt.Errorf("unable to write nested struct %v due to error: '%v'", nested, err)
+		}
+	}
+	return builder.String(), nil
+}
+
+func writeGo(key string, v interface{}) (fieldText string, nestedClasses string, err error) {
+	var nestedClassesArray []string
+	var typeName string
+	vType := reflect.ValueOf(v)
+	switch vType.Kind() {
+	case reflect.Float64:
+		//go always unmarshalls numbers to this so we are going to detect things
+		if strings.Contains(fmt.Sprintf("%v", v), ".") {
+			typeName = "float64"
+		} else {
+			typeName = "int64"
+		}
+	case reflect.String:
+		typeName = "string"
+	case reflect.Bool:
+		typeName = "bool"
+	case reflect.Slice:
+		sliceValue := v.([]interface{})
+		if len(sliceValue) > 0 {
+			firstElement := sliceValue[0]
+			firstElementType := reflect.ValueOf(firstElement)
+			switch firstElementType.Kind() {
+			case reflect.Float32:
+				typeName = "[]float32"
+			case reflect.Float64:
+				typeName = "[]float64"
+			case reflect.Int:
+				typeName = "[]int"
+			case reflect.String:
+				typeName = "[]string"
+			case reflect.Bool:
+				typeName = "[]bool"
+			case reflect.Slice:
+				typeName = "[]interface{}"
+			case reflect.Map:
+				// make a nested class
+				mapValue := firstElement.(map[string]interface{})
+				nestedValueName := fmt.Sprintf("%v", capitalize(key))
+				newNestedClassStr, err := writeGoStruct(nestedValueName, mapValue)
+				if err != nil {
+					return "", "", fmt.Errorf("unable to handle nested type %T for %v", mapValue, key)
+				}
+				nestedClassesArray = append(nestedClassesArray, newNestedClassStr)
+				typeName = fmt.Sprintf("[]%v", nestedValueName)
+			}
+		} else {
+			// no types so we can't guess just assume this
+			typeName = "[]interface{}"
+		}
+	case reflect.Map:
+		mapValue := v.(map[string]interface{})
+		nestedValueName := fmt.Sprintf("%v", capitalize(key))
+		newNestedClassStr, err := writeGoStruct(nestedValueName, mapValue)
+		if err != nil {
+			return "", "", fmt.Errorf("unable to handle nested type %T for %v", mapValue, key)
+		}
+		nestedClassesArray = append(nestedClassesArray, newNestedClassStr)
+		typeName = nestedValueName
+	default:
+		return "", "", fmt.Errorf("unable to handle type %t for %v", v, key)
+	}
+	field := fmt.Sprintf("\t%v %v `json:\"%v\"`\n", capitalize(key), typeName, key)
+	return field, strings.Join(nestedClassesArray, "\n\n"), nil
 }
 
 func writeJavaClass(name string, isStatic bool, result map[string]interface{}) (string, error) {
@@ -138,7 +248,7 @@ func writeJavaClass(name string, isStatic bool, result map[string]interface{}) (
 
 func writeJava(key string, v interface{}) (fieldText string, nestedClasses string, err error) {
 	var nestedClassesArray []string
-	var typeName string = ""
+	var typeName string
 	vType := reflect.ValueOf(v)
 	switch vType.Kind() {
 	case reflect.Float64:
